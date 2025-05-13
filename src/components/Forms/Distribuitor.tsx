@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Check, AlertTriangle, MapPin, FileText, Plus, Building, Truck, Phone, Mail, UserRound } from "lucide-react";
+import { Check, AlertTriangle, MapPin, FileText, Plus, Building, Truck, Phone, Mail, UserRound, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 type FormStatus = "idle" | "submitting" | "success" | "error";
 type AddressType = "billing" | "delivery";
 type TabValue = "cadastro" | "endereco" | "contato";
+type CnpjStatus = "idle" | "loading" | "valid" | "invalid";
 
 interface Address {
   id: string;
@@ -42,6 +43,22 @@ interface ContactInfo {
   website: string;
   contactName: string;
   contactRole: string;
+}
+
+interface CnpjData {
+  nome: string;
+  fantasia: string;
+  email: string;
+  telefone: string;
+  logradouro: string;
+  numero: string;
+  complemento: string;
+  bairro: string;
+  cidade: string;
+  uf: string;
+  cep: string;
+  situacao: string;
+  erro?: string;
 }
 
 interface DistributorFormData {
@@ -87,7 +104,6 @@ const distributorFormFields = [
   },
 ];
 
-// Add the missing addressFields array
 const addressFields = [
   {
     name: "cep",
@@ -160,6 +176,19 @@ const contactFields = [
   },
 ];
 
+// Função para formatar CNPJ
+const formatCnpj = (value: string) => {
+  const cnpjDigits = value.replace(/\D/g, "");
+  if (cnpjDigits.length <= 2) return cnpjDigits;
+  if (cnpjDigits.length <= 5) return `${cnpjDigits.slice(0, 2)}.${cnpjDigits.slice(2)}`;
+  if (cnpjDigits.length <= 8) return `${cnpjDigits.slice(0, 2)}.${cnpjDigits.slice(2, 5)}.${cnpjDigits.slice(5)}`;
+  if (cnpjDigits.length <= 12) return `${cnpjDigits.slice(0, 2)}.${cnpjDigits.slice(2, 5)}.${cnpjDigits.slice(5, 8)}/${cnpjDigits.slice(8)}`;
+  return `${cnpjDigits.slice(0, 2)}.${cnpjDigits.slice(2, 5)}.${cnpjDigits.slice(5, 8)}/${cnpjDigits.slice(8, 12)}-${cnpjDigits.slice(12, 14)}`;
+};
+
+// Função para formatar somente números do CNPJ
+const unformatCnpj = (value: string) => value.replace(/\D/g, "");
+
 export default function DistributorForm() {
   const [activeTab, setActiveTab] = useState<TabValue>("cadastro");
   const [distributorForm, setDistributorForm] = useState<DistributorFormData>({
@@ -173,6 +202,43 @@ export default function DistributorForm() {
   const [formStatus, setFormStatus] = useState<FormStatus>("idle");
   const [isLoadingCep, setIsLoadingCep] = useState<Record<string, boolean>>({});
   const [cepErrors, setCepErrors] = useState<Record<string, string>>({});
+  const [cnpjStatus, setCnpjStatus] = useState<CnpjStatus>("idle");
+  const [cnpjError, setCnpjError] = useState<string>("");
+  const [displayCnpj, setDisplayCnpj] = useState<string>("");
+
+  // Efeito para formatar o CNPJ na exibição
+  useEffect(() => {
+    setDisplayCnpj(formatCnpj(distributorForm.cnpj));
+  }, [distributorForm.cnpj]);
+
+  // Check if cadastro section is filled and change to endereco tab
+
+
+  // Check if endereco section is filled and change to contato tab
+  useEffect(() => {
+    if (activeTab === "endereco") {
+      const billingFilled = distributorForm.billingAddress.cep && 
+                          distributorForm.billingAddress.street && 
+                          distributorForm.billingAddress.number &&
+                          distributorForm.billingAddress.city &&
+                          distributorForm.billingAddress.state;
+      
+      // Verifica se pelo menos o primeiro endereço de entrega está preenchido
+      const deliveryFilled = distributorForm.deliveryAddresses.length > 0 && 
+                            distributorForm.deliveryAddresses[0].cep &&
+                            distributorForm.deliveryAddresses[0].street &&
+                            distributorForm.deliveryAddresses[0].number &&
+                            distributorForm.deliveryAddresses[0].city &&
+                            distributorForm.deliveryAddresses[0].state;
+      
+      if (billingFilled && deliveryFilled) {
+        const timer = setTimeout(() => {
+          setActiveTab("contato");
+        }, 500);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [distributorForm.billingAddress, distributorForm.deliveryAddresses, activeTab]);
 
   const fetchAddressByCep = async (cep: string, addressId: string, type: AddressType) => {
     if (!cep || cep.length !== 8) {
@@ -223,6 +289,126 @@ export default function DistributorForm() {
       setCepErrors(prev => ({ ...prev, [addressId]: "Erro ao buscar CEP" }));
     } finally {
       setIsLoadingCep(prev => ({ ...prev, [addressId]: false }));
+    }
+  };
+
+  const fetchCnpjData = async (cnpj: string) => {
+    if (!cnpj || cnpj.length !== 14) {
+      return;
+    }
+
+    setCnpjStatus("loading");
+    setCnpjError("");
+
+    try {
+      // Usando a API do CNPJWS
+      const response = await fetch(`https://publica.cnpj.ws/cnpj/${cnpj}`);
+      const data = await response.json();
+
+      if (data.erro) {
+        setCnpjError(data.erro);
+        setCnpjStatus("invalid");
+        return;
+      }
+
+      // Processando os dados retornados pela API
+      const cnpjData: CnpjData = {
+        nome: data.razao_social || "",
+        fantasia: data.estabelecimento?.nome_fantasia || "",
+        email: data.estabelecimento?.email || "",
+        telefone: data.estabelecimento?.ddd1 && data.estabelecimento?.telefone1 
+                ? `(${data.estabelecimento.ddd1}) ${data.estabelecimento.telefone1}` 
+                : "",
+        logradouro: data.estabelecimento?.tipo_logradouro 
+                  ? `${data.estabelecimento.tipo_logradouro} ${data.estabelecimento.logradouro}` 
+                  : data.estabelecimento?.logradouro || "",
+        numero: data.estabelecimento?.numero || "",
+        complemento: data.estabelecimento?.complemento || "",
+        bairro: data.estabelecimento?.bairro || "",
+        cidade: data.estabelecimento?.cidade?.nome || "",
+        uf: data.estabelecimento?.estado?.sigla || "",
+        cep: data.estabelecimento?.cep 
+            ? data.estabelecimento.cep.replace(/\D/g, "") 
+            : "",
+        situacao: data.estabelecimento?.situacao_cadastral || ""
+      };
+
+      // Atualizando os dados no formulário
+      // Atualizando os dados no formulário
+setDistributorForm(prev => {
+  const updatedForm = {
+    ...prev,
+    name: cnpjData.nome,
+    billingAddress: {
+      ...prev.billingAddress,
+      cep: cnpjData.cep,
+      street: cnpjData.logradouro,
+      number: cnpjData.numero,
+      neighborhood: cnpjData.bairro,
+      city: cnpjData.cidade,
+      state: cnpjData.uf,
+    },
+    contactInfo: {
+      ...prev.contactInfo,
+      email: cnpjData.email,
+      phone: cnpjData.telefone,
+    }
+  };
+
+  // If the delivery address is empty, fill with the same data
+  if (!prev.deliveryAddresses[0].street) {
+    updatedForm.deliveryAddresses = [
+      {
+        ...prev.deliveryAddresses[0],
+        cep: cnpjData.cep,
+        street: cnpjData.logradouro,
+        number: cnpjData.numero,
+        neighborhood: cnpjData.bairro,
+        city: cnpjData.cidade,
+        state: cnpjData.uf,
+      },
+      ...prev.deliveryAddresses.slice(1)
+    ];
+  }
+
+  return updatedForm;
+});
+      // Verificando situação cadastral
+      if (cnpjData.situacao !== "ATIVA") {
+        setCnpjError(`CNPJ com situação cadastral: ${cnpjData.situacao}`);
+        setCnpjStatus("invalid");
+        return;
+      }
+
+      setCnpjStatus("valid");
+    } catch (error) {
+      console.error("Erro ao consultar CNPJ:", error);
+      setCnpjError("Erro ao consultar CNPJ. Verifique sua conexão ou tente novamente mais tarde.");
+      setCnpjStatus("invalid");
+    }
+  };
+  
+  const handleCnpjChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const rawValue = e.target.value.replace(/\D/g, "");
+    
+    setDistributorForm(prev => ({
+      ...prev,
+      cnpj: rawValue
+    }));
+    
+    if (cnpjStatus !== "idle") {
+      setCnpjStatus("idle");
+      setCnpjError("");
+    }
+  };
+
+  const handleValidateCnpj = () => {
+    const cnpj = unformatCnpj(distributorForm.cnpj);
+    if (cnpj.length === 14) {
+      fetchCnpjData(cnpj);
+    } else {
+      setCnpjError("CNPJ deve conter 14 dígitos");
+      setCnpjStatus("invalid");
     }
   };
 
@@ -323,8 +509,13 @@ export default function DistributorForm() {
         deliveryAddresses: [emptyAddress()],
         contactInfo: emptyContactInfo(),
       });
+      
+      setDisplayCnpj("");
+      setCnpjStatus("idle");
+      setCnpjError("");
 
       setFormStatus("success");
+      setActiveTab("cadastro"); // Reset to first tab after successful submission
     } catch (error) {
       setFormStatus("error");
     }
@@ -392,9 +583,80 @@ export default function DistributorForm() {
     );
   };
 
+  const renderCnpjField = () => {
+    const getCnpjStatusColor = () => {
+      switch (cnpjStatus) {
+        case "valid": return "text-green-500";
+        case "invalid": return "text-red-500";
+        default: return "text-gray-400";
+      }
+    };
+
+    const getCnpjStatusIcon = () => {
+      switch (cnpjStatus) {
+        case "loading": 
+          return <div className="w-4 h-4 border-2 border-t-transparent border-blue-500 rounded-full animate-spin"/>;
+        case "valid": 
+          return <Check className="w-4 h-4 text-green-500" />;
+        case "invalid": 
+          return <AlertTriangle className="w-4 h-4 text-red-500" />;
+        default: 
+          return null;
+      }
+    };
+
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.1 }}
+        className="space-y-2"
+      >
+        <Label
+          htmlFor="distributor-cnpj"
+          className="block text-sm font-medium text-gray-700 dark:text-gray-300"
+        >
+          CNPJ
+        </Label>
+        <div className="relative flex items-center">
+          <Input
+            id="distributor-cnpj"
+            type="text"
+            placeholder="CNPJ do Distribuidor"
+            value={displayCnpj}
+            onChange={handleCnpjChange}
+            className="w-full focus:ring-2 focus:ring-primary/50 transition-all duration-300 pr-20"
+            maxLength={18}
+          />
+          <div className="absolute right-2 flex items-center space-x-2">
+            <span className={cn("mr-1", getCnpjStatusColor())}>
+              {getCnpjStatusIcon()}
+            </span>
+            <Button 
+              type="button" 
+              size="sm" 
+              variant="outline" 
+              className="h-7 py-0 px-2 text-xs"
+              onClick={handleValidateCnpj}
+              disabled={cnpjStatus === "loading" || unformatCnpj(distributorForm.cnpj).length !== 14}
+            >
+              <Search className="w-3 h-3 mr-1" /> Verificar
+            </Button>
+          </div>
+        </div>
+        {cnpjError && (
+          <p className="text-sm text-red-500 mt-1">{cnpjError}</p>
+        )}
+        {cnpjStatus === "valid" && (
+          <p className="text-sm text-green-500 mt-1">CNPJ válido e ativo</p>
+        )}
+      </motion.div>
+    );
+  };
+
   const renderFormBySection = (section: string) => {
     const sectionFields = distributorFormFields.filter(
-      (field) => field.section === section
+      (field) => field.section === section && field.name !== "cnpj" // Excluir o campo CNPJ padrão
     );
 
     return (
@@ -432,6 +694,9 @@ export default function DistributorForm() {
             </div>
           </motion.div>
         ))}
+        
+        {/* Renderizando campo CNPJ personalizado */}
+        {renderCnpjField()}
       </div>
     );
   };
@@ -616,9 +881,22 @@ export default function DistributorForm() {
           <Phone className="w-5 h-5" /> Informações de Contato:
         </h1>
         {renderContactFields()}
+        
+        {/* Botão de envio aparece apenas na última tab */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+          className="pt-4"
+        >
+          {renderSubmitButton()}
+        </motion.div>
       </div>
     </motion.div>
   );
+
+  // Feedback visual de progresso no formulário
+  
 
   return (
     <motion.div
@@ -628,7 +906,7 @@ export default function DistributorForm() {
       className="space-y-6 bg-white dark:bg-gray-900 p-6 rounded-xl shadow-lg relative"
     >
       {/* Header with Title on the left and Tabs on the right */}
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex justify-between items-center mb-2">
         <h2 className="text-2xl font-bold text-gray-800 dark:text-gray-100">
           Informações do Distribuidor
         </h2>
@@ -664,22 +942,14 @@ export default function DistributorForm() {
         </motion.div>
       </div>
 
-      <div>
+      {/* Indicador de progresso */}
 
+      <div>
         <AnimatePresence mode="wait">
           {activeTab === "cadastro" && renderCadastroTab()}
           {activeTab === "endereco" && renderEnderecoTab()}
           {activeTab === "contato" && renderContatoTab()}
         </AnimatePresence>
-
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-          className="pt-4"
-        >
-          {renderSubmitButton()}
-        </motion.div>
       </div>
     </motion.div>
   );
